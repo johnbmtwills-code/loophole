@@ -80,7 +80,7 @@ h1{margin:0;font-family:var(--display);font-weight:400;color:var(--line);
     <div class="keys" id="keys">Keyboard: arrows look · Q/E zoom · Space fires · mouse drag and wheel work too</div>
     <div id="rot">Turn the screen sideways and stand it up</div>
     <button id="go" type="button">Take position</button>
-    <div class="foot"><span id="best">Best 0</span><span id="ver">v0.2</span></div>
+    <div class="foot"><span id="best">Best 0</span><span id="ver">v0.3</span></div>
   </div>
 </div>
 
@@ -88,7 +88,7 @@ h1{margin:0;font-family:var(--display);font-weight:400;color:var(--line);
 <script>
 (function(){
 'use strict';
-const VERSION='v0.2';
+const VERSION='v0.3';
 document.getElementById('ver').textContent=VERSION;
 
 // ---------- constants ----------
@@ -107,7 +107,7 @@ const renderer=new THREE.WebGLRenderer({canvas:gl,antialias:true});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
 renderer.setClearColor(0x000000,1);
 const scene=new THREE.Scene();
-scene.fog=new THREE.Fog(0x000000,180,1250);
+scene.fog=new THREE.Fog(0x000000,180,1550);
 const camera=new THREE.PerspectiveCamera(60,1,0.5,5000);
 camera.rotation.order='YXZ';
 camera.position.copy(EYE);
@@ -152,7 +152,9 @@ const grid=new THREE.GridHelper(3200,160,DIMG,DIMG);scene.add(grid);
 const world=new THREE.Group();scene.add(world);
 const fx=new THREE.Group();scene.add(fx);
 
-let collidables=[], targets=[], occ=[], roadPts=[];
+let collidables=[], targets=[], occ=[], roadPts=[], vehicles=[];
+const BLUE=0x4a8dff, BLUEDIM=0x1d3c78;
+const LINE_BLUEDIM=new THREE.LineBasicMaterial({color:BLUEDIM});
 const ray=new THREE.Raycaster();
 const _v=new THREE.Vector3(),_d=new THREE.Vector3();
 
@@ -230,6 +232,74 @@ function fence(){const p=[];const z=-34;
   for(let x=-34;x<=34;x+=4){p.push(x,0,z,x,2.4,z);}
   for(const y of [0.8,1.6,2.35])p.push(-34,y,z,34,y,z);
   world.add(lines(p,LINE_DIM));}
+
+// out-of-bounds scenery: blue lines mark everything outside the target zone
+function blueBuilding(x,z,w,d,h){
+  const g=new THREE.BoxGeometry(w,h,d);g.translate(0,h/2,0);
+  // fade with distance by hand (no fog), so the far town stays legible
+  const k=1-Math.min(1,Math.max(0,(Math.hypot(x,z)-100)/1500))*0.6;
+  const mat=new THREE.LineBasicMaterial({color:new THREE.Color(BLUE).multiplyScalar(k),fog:false});
+  const dim=new THREE.LineBasicMaterial({color:new THREE.Color(BLUEDIM).multiplyScalar(k),fog:false});
+  const grp=wire(g,mat);grp.position.set(x,0,z);world.add(grp);collidables.push(grp.children[0]);
+  const p=[];for(let y=3.4;y<h-1.2;y+=3.4){const f=d/2+0.06;p.push(-w/2,y,f,w/2,y,f);}
+  if(h>10&&Math.random()<0.4){p.push(0,h,0,0,h+R(4,10),0);}
+  if(p.length){const l=lines(p,dim);l.position.set(x,0,z);world.add(l);}
+  occ.push({x,z,r:Math.hypot(w,d)/2});
+}
+function outskirts(){
+  // flanks, left and right of the zone
+  for(let i=0;i<26;i++)for(let k=0;k<25;k++){
+    const side=Math.random()<0.5?-1:1,a=side*R(YAW_MAX+0.1,88*D2R),d=R(70,900),sc=0.6+d/600;const [x,z]=polar(d,a);
+    const w=R(6,15)*sc,dd=R(6,13)*sc;let h=R(5,13)*sc;if(Math.random()<0.15)h*=2.2;
+    if(freeSpot(x,z,Math.hypot(w,dd)/2)){blueBuilding(x,z,w,dd,h);break;}}
+  // the far town, beyond the last target band
+  for(let i=0;i<22;i++)for(let k=0;k<25;k++){
+    const a=R(-88,88)*D2R,d=R(780,1350);const [x,z]=polar(d,a);
+    const w=R(10,26),dd=R(10,22);let h=R(8,22);if(Math.random()<0.18)h*=2.4;
+    if(freeSpot(x,z,Math.hypot(w,dd)/2)){blueBuilding(x,z,w,dd,h);break;}}
+  // dashed ground lines along the zone edges
+  const p=[];
+  for(const a of [-YAW_MAX,YAW_MAX])for(let d=30;d<740;d+=14){const [x0,z0]=polar(d,a),[x1,z1]=polar(d+7,a);p.push(x0,0.05,z0,x1,0.05,z1);}
+  for(let a=-YAW_MAX;a<YAW_MAX;a+=0.02){const [x0,z0]=polar(740,a),[x1,z1]=polar(740,Math.min(YAW_MAX,a+0.01));p.push(x0,0.05,z0,x1,0.05,z1);}
+  world.add(lines(p,LINE_BLUEDIM));
+}
+
+// jeeps: scenery only, they patrol the road
+function jeepModel(){
+  const g=new THREE.Group();
+  const body=new THREE.BoxGeometry(2.0,0.9,4.2);body.translate(0,1.0,0);g.add(wire(body,LINE));
+  const hood=new THREE.BoxGeometry(1.9,0.25,1.4);hood.translate(0,1.55,-1.3);g.add(wire(hood,LINE));
+  g.add(lines([-0.95,1.45,-0.5,-0.95,2.25,-0.35, 0.95,1.45,-0.5,0.95,2.25,-0.35, -0.95,2.25,-0.35,0.95,2.25,-0.35,
+    -0.95,1.45,1.0,-0.95,2.45,1.0, 0.95,1.45,1.0,0.95,2.45,1.0, -0.95,2.45,1.0,0.95,2.45,1.0,
+    -0.6,1.45,-2.12,-0.6,1.25,-2.12, 0.6,1.45,-2.12,0.6,1.25,-2.12, 0.3,2.45,1.0,0.3,3.6,1.3],LINE));
+  const wg=new THREE.CylinderGeometry(0.45,0.45,0.35,8);wg.rotateZ(Math.PI/2);
+  const wheels=[];
+  for(const [x,z] of [[-1.05,-1.35],[1.05,-1.35],[-1.05,1.35],[1.05,1.35]]){const w=wire(wg,LINE);w.position.set(x,0.45,z);g.add(w);wheels.push(w);}
+  const lights=lines([-0.6,1.25,-2.15,-0.9,0.9,-9, 0.6,1.25,-2.15,0.9,0.9,-9],new THREE.LineBasicMaterial({color:HOT,transparent:true,opacity:0.35}));g.add(lights);
+  return {g,wheels};
+}
+function spawnJeeps(n){
+  if(roadPts.length<8)return;
+  const cum=[0];for(let i=1;i<roadPts.length;i++)cum.push(cum[i-1]+Math.hypot(roadPts[i][0]-roadPts[i-1][0],roadPts[i][1]-roadPts[i-1][1]));
+  const s0=cum[4],s1=cum[cum.length-1];
+  for(let i=0;i<n;i++){const m=jeepModel();world.add(m.g);
+    vehicles.push({g:m.g,wheels:m.wheels,cum,s:R(s0,s1),s0,s1,dir:Math.random()<0.5?1:-1,spd:R(7,13),pause:0});}
+}
+function updateVehicles(dt){
+  for(const v of vehicles){
+    if(v.pause>0){v.pause-=dt;continue;}
+    v.s+=v.dir*v.spd*dt;
+    if(v.s>v.s1||v.s<v.s0){v.s=Math.max(v.s0,Math.min(v.s1,v.s));v.dir*=-1;v.pause=R(1,4);}
+    let i=1;while(i<v.cum.length-1&&v.cum[i]<v.s)i++;
+    const a=roadPts[i-1],b=roadPts[i],k=(v.s-v.cum[i-1])/Math.max(0.01,v.cum[i]-v.cum[i-1]);
+    const dx=b[0]-a[0],dz=b[1]-a[1],len=Math.hypot(dx,dz)||1;
+    // keep to the right-hand lane for the direction of travel
+    const lane=2.2*v.dir;
+    v.g.position.set(a[0]+dx*k+(-dz/len)*lane,0,a[1]+dz*k+(dx/len)*lane);
+    v.g.rotation.y=Math.atan2(-dx*v.dir,-dz*v.dir);
+    for(const w of v.wheels)w.rotation.x-=v.spd*dt/0.45;
+  }
+}
 
 // ---------- targets ----------
 function mkTarget(kind,label,holder,body,anchor,r,extra){
@@ -324,9 +394,9 @@ function poleSpot(dMin,dMax){for(let i=0;i<40;i++){const d=R(dMin,dMax),a=R(-YAW
 
 // ---------- mission build ----------
 function buildWorld(){
-  world.clear();collidables=[];targets=[];occ=[];roadPts=[];
+  world.clear();collidables=[];targets=[];occ=[];roadPts=[];vehicles=[];
   ridge(1500,6,70,0x1f8a3f);ridge(2300,30,120,0x0f4a22);moon();
-  road();fence();pylons(-R(250,290));
+  road();fence();pylons(-R(250,290));outskirts();
   const bands=[{d0:60,d1:150,n:6,s:0.65},{d0:150,d1:340,n:11,s:1},{d0:340,d1:700,n:13,s:1.6}];
   const blds=[];
   for(const bd of bands)for(let i=0;i<bd.n;i++)for(let k=0;k<25;k++){
@@ -372,6 +442,7 @@ function buildWorld(){
   const ra=[R(-YAW_MAX+0.1,-0.08),R(0.08,YAW_MAX-0.1)];
   for(const a0 of ra)for(let k=0;k<30;k++){const d=R(520,700),a=a0+R(-0.06,0.06);const [x,z]=polar(d,a);
     if(!freeSpot(x,z,4))continue;if(accept(radarTarget(x,z))){occ.push({x,z,r:4});break;}}
+  spawnJeeps(3);
   // drones patrol mid and far bands
   for(let i=0;i<3;i++){const d=R(170,480),a=R(-YAW_MAX*0.6,YAW_MAX*0.6);const [cx,cz]=polar(d,a);
     const t=droneTarget(cx,cz,R(18,34),R(25,60)*(d/300),R(14,34),R(3,4.5));world.add(t.holder);targets.push(t);}
@@ -692,7 +763,7 @@ function frame(now){
     if(t.kind==='drone'){if(!t.prev){t.prev=new THREE.Vector3();t.vel=new THREE.Vector3();}t.prev.copy(t.c);}
     t.holder.updateMatrixWorld(true);t.anchor.getWorldPosition(t.c);
     if(t.kind==='drone'&&dt>0){if(t.seen)t.vel.lerp(_v.copy(t.c).sub(t.prev).divideScalar(dt),0.25);t.seen=true;}}}
-  updateBullets(dt);updateFx(dt);
+  updateVehicles(dt);updateBullets(dt);updateFx(dt);
   for(let i=popups.length-1;i>=0;i--){popups[i].t+=dt;if(popups[i].t>2.2)popups.splice(i,1);}
   kickP*=Math.exp(-dt*7);flash=Math.max(0,flash-dt*6);hitMark=Math.max(0,hitMark-dt);
   if(state==='ending'){endT-=dt;if(endT<=0)endMission();}
