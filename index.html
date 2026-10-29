@@ -75,12 +75,12 @@ h1{margin:0;font-family:var(--display);font-weight:400;color:var(--line);
       <li><span>The scope reads the range. Put the target on the <b>HOLD</b> mark to allow for drop</span></li>
       <li><span>Hit a <b class="r">junction box</b> and every camera on its cable dies with it</span></li>
       <li><span>Each shot raises the <b>alert</b>. Let it settle, or the site locks down</span></li>
-      <li><span>Drones take time to reach you. <b>Lead</b> them</span></li>
+      <li><span>Drones keep moving while the round flies. In the scope, put the cross on the red <b class="r">LEAD</b> ring</span></li>
     </ul>
     <div class="keys" id="keys">Keyboard: arrows look · Q/E zoom · Space fires · mouse drag and wheel work too</div>
     <div id="rot">Turn the screen sideways and stand it up</div>
     <button id="go" type="button">Take position</button>
-    <div class="foot"><span id="best">Best 0</span><span id="ver">v0.1</span></div>
+    <div class="foot"><span id="best">Best 0</span><span id="ver">v0.2</span></div>
   </div>
 </div>
 
@@ -88,7 +88,7 @@ h1{margin:0;font-family:var(--display);font-weight:400;color:var(--line);
 <script>
 (function(){
 'use strict';
-const VERSION='v0.1';
+const VERSION='v0.2';
 document.getElementById('ver').textContent=VERSION;
 
 // ---------- constants ----------
@@ -284,9 +284,9 @@ function droneTarget(cx,cz,h,rx,rz,spd){
     rg.add(lines([-0.75,0,0,0.75,0,0, 0,0,-0.75,0,0,0.75],mat));body.add(rg);rotors.push(rg);}
   body.add(lines([0,-0.4,0,0,-0.75,-0.25],mat));
   const anchor=new THREE.Object3D();body.add(anchor);
-  const t=mkTarget('drone','DRONE',holder,body,anchor,1.35,{mat,cx,cz,h,rx,rz,ang:R(0,6.28),w:spd/((rx+rz)/2),rotors,bob:R(0,6)});
+  const t=mkTarget('drone','DRONE',holder,body,anchor,1.9,{mat,cx,cz,h,rx,rz,ang:R(0,6.28),w:spd/((rx+rz)/2),rotors,bob:R(0,6)});
   t.update=function(dt){if(!this.alive)return;
-    this.ang+=this.w*dt*(1+alert*0.5);this.bob+=dt*1.3;
+    this.ang+=this.w*dt*(1+alert*0.25);this.bob+=dt*1.3;
     const x=this.cx+Math.cos(this.ang)*this.rx,z=this.cz+Math.sin(this.ang)*this.rz;
     this.holder.position.set(x,this.h+Math.sin(this.bob)*0.7,z);
     this.holder.rotation.y=Math.atan2(-Math.sin(this.ang)*this.rx,Math.cos(this.ang)*this.rz);
@@ -374,7 +374,7 @@ function buildWorld(){
     if(!freeSpot(x,z,4))continue;if(accept(radarTarget(x,z))){occ.push({x,z,r:4});break;}}
   // drones patrol mid and far bands
   for(let i=0;i<3;i++){const d=R(170,480),a=R(-YAW_MAX*0.6,YAW_MAX*0.6);const [cx,cz]=polar(d,a);
-    const t=droneTarget(cx,cz,R(18,34),R(25,60)*(d/300),R(14,34),R(7,11));world.add(t.holder);targets.push(t);}
+    const t=droneTarget(cx,cz,R(18,34),R(25,60)*(d/300),R(14,34),R(3,4.5));world.add(t.holder);targets.push(t);}
 }
 
 // ---------- effects ----------
@@ -610,6 +610,17 @@ function drawScope(){
   // hold marker for the current range
   if(rng!==null){const hm=holdMil(rng),o=hm*pxm;if(o<Rs*0.6){hx.fillStyle=HUDHOT;hx.beginPath();hx.moveTo(cx-9,cy+o);hx.lineTo(cx-17,cy+o-5);hx.lineTo(cx-17,cy+o+5);hx.closePath();hx.fill();}}
   if(rngTarget){hx.strokeStyle=HUDRED;hx.lineWidth=1.5;hx.beginPath();hx.arc(cx,cy,10,0,Math.PI*2);hx.stroke();}
+  // lead ring: where to put the cross so the round meets a moving drone (allows for travel time and drop)
+  const pr=new THREE.Vector3();
+  for(const t of targets){if(t.kind!=='drone'||!t.alive||!t.vel)continue;
+    let tof=t.c.distanceTo(EYE)/MV;
+    for(let i=0;i<3;i++){pr.copy(t.c).addScaledVector(t.vel,tof);tof=pr.distanceTo(EYE)/MV;}
+    pr.y+=0.5*G*tof*tof;pr.project(camera);if(pr.z>1)continue;
+    const x=(pr.x+1)/2*W,y=(1-pr.y)/2*H;if(Math.hypot(x-cx,y-cy)>Rs*0.9)continue;
+    const near=Math.hypot(x-cx,y-cy)<Math.max(6,t.r*pxm*1000/Math.max(1,t.c.distanceTo(EYE)));
+    hx.strokeStyle=near?HUDHOT:HUDRED;hx.lineWidth=near?2.5:1.5;
+    hx.beginPath();hx.arc(x,y,9,0,Math.PI*2);hx.stroke();line(x-14,y,x-10,y);line(x+10,y,x+14,y);line(x,y-14,x,y-10);line(x,y+10,x,y+14);
+    txt('LEAD',x+16,y-10,11,'left',near?HUDHOT:HUDRED);}
 }
 function drawReadouts(scoped){
   const L=insets.l+18, T=insets.t+24;
@@ -677,7 +688,10 @@ function frame(now){
     if(state==='play'&&rounds<=0&&!bullets.length&&!timers.length&&down<targets.length){state='ending';endWhy='dry';endT=1.0;}
   }
   for(let i=timers.length-1;i>=0;i--){timers[i].t-=dt;if(timers[i].t<=0){const f=timers[i].fn;timers.splice(i,1);f();}}
-  for(const t of targets){if(t.update)t.update(dt);if(t.alive){t.holder.updateMatrixWorld(true);t.anchor.getWorldPosition(t.c);}}
+  for(const t of targets){if(t.update)t.update(dt);if(t.alive){
+    if(t.kind==='drone'){if(!t.prev){t.prev=new THREE.Vector3();t.vel=new THREE.Vector3();}t.prev.copy(t.c);}
+    t.holder.updateMatrixWorld(true);t.anchor.getWorldPosition(t.c);
+    if(t.kind==='drone'&&dt>0){if(t.seen)t.vel.lerp(_v.copy(t.c).sub(t.prev).divideScalar(dt),0.25);t.seen=true;}}}
   updateBullets(dt);updateFx(dt);
   for(let i=popups.length-1;i>=0;i--){popups[i].t+=dt;if(popups[i].t>2.2)popups.splice(i,1);}
   kickP*=Math.exp(-dt*7);flash=Math.max(0,flash-dt*6);hitMark=Math.max(0,hitMark-dt);
